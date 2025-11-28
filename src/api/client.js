@@ -59,7 +59,7 @@ function buildRequesterConfig(headers, body = null) {
 
 // 统一错误处理
 async function handleApiError(error, token) {
-  const status = error.response?.status || error.status;
+  const status = error.response?.status || error.status || 'Unknown';
   let errorBody = error.message;
   
   if (error.response?.data?.readable) {
@@ -160,8 +160,7 @@ export async function generateAssistantResponse(requestBody, callback) {
     try {
       const axiosConfig = { ...buildAxiosConfig(config.api.url, headers, requestBody), responseType: 'stream' };
       const response = await axios(axiosConfig);
-      if (response.status === 403) tokenManager.disableCurrentToken(token);
-
+      
       response.data.on('data', chunk => processChunk(chunk.toString()));
       await new Promise((resolve, reject) => {
         response.data.on('end', resolve);
@@ -171,20 +170,21 @@ export async function generateAssistantResponse(requestBody, callback) {
       await handleApiError(error, token);
     }
   } else {
-    const streamResponse = requester.antigravity_fetchStream(config.api.url, buildRequesterConfig(headers, requestBody));
-    let errorBody = '';
-    let statusCode = null;
+    try {
+      const streamResponse = requester.antigravity_fetchStream(config.api.url, buildRequesterConfig(headers, requestBody));
+      let errorBody = '';
+      let statusCode = null;
 
-    await new Promise((resolve, reject) => {
-      streamResponse
-        .onStart(({ status }) => {
-          statusCode = status;
-          if (status === 403) tokenManager.disableCurrentToken(token);
-        })
-        .onData((chunk) => statusCode !== 200 ? errorBody += chunk : processChunk(chunk))
-        .onEnd(() => statusCode !== 200 ? reject(new Error(`API请求失败 (${statusCode}): ${errorBody}`)) : resolve())
-        .onError(reject);
-    });
+      await new Promise((resolve, reject) => {
+        streamResponse
+          .onStart(({ status }) => { statusCode = status; })
+          .onData((chunk) => statusCode !== 200 ? errorBody += chunk : processChunk(chunk))
+          .onEnd(() => statusCode !== 200 ? reject({ status: statusCode, message: errorBody }) : resolve())
+          .onError(reject);
+      });
+    } catch (error) {
+      await handleApiError(error, token);
+    }
   }
 }
 
@@ -195,9 +195,17 @@ export async function getAvailableModels() {
   const headers = buildHeaders(token);
   
   try {
-    const data = useAxios
-      ? (await axios(buildAxiosConfig(config.api.modelsUrl, headers, {}))).data
-      : await (await requester.antigravity_fetch(config.api.modelsUrl, buildRequesterConfig(headers, {}))).json();
+    let data;
+    if (useAxios) {
+      data = (await axios(buildAxiosConfig(config.api.modelsUrl, headers, {}))).data;
+    } else {
+      const response = await requester.antigravity_fetch(config.api.modelsUrl, buildRequesterConfig(headers, {}));
+      if (response.status !== 200) {
+        const errorBody = await response.text();
+        throw { status: response.status, message: errorBody };
+      }
+      data = await response.json();
+    }
     
     return {
       object: 'list',
@@ -227,8 +235,7 @@ export async function generateAssistantResponseNoStream(requestBody) {
       const response = await requester.antigravity_fetch(config.api.noStreamUrl, buildRequesterConfig(headers, requestBody));
       if (response.status !== 200) {
         const errorBody = await response.text();
-        if (response.status === 403) tokenManager.disableCurrentToken(token);
-        throw new Error(response.status === 403 ? `该账号没有使用权限，已自动禁用。错误详情: ${errorBody}` : `API请求失败 (${response.status}): ${errorBody}`);
+        throw { status: response.status, message: errorBody };
       }
       data = await response.json();
     }
@@ -241,6 +248,7 @@ export async function generateAssistantResponseNoStream(requestBody) {
   let content = '';
   let thinkingContent = '';
   const toolCalls = [];
+  const imageContents = [];
   
   for (const part of parts) {
     if (part.thought === true) {
@@ -249,12 +257,24 @@ export async function generateAssistantResponseNoStream(requestBody) {
       content += part.text;
     } else if (part.functionCall) {
       toolCalls.push(convertToToolCall(part.functionCall));
+    } else if (part.inlineData) {
+      imageContents.push({
+        type: 'image_url',
+        image_url: { url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` }
+      });
     }
   }
   
   // 拼接思维链标签
   if (thinkingContent) {
     content = `<think>\n${thinkingContent}\n</think>\n${content}`;
+  }
+  
+  // 生图模型：转换为markdown格式
+  if (imageContents.length > 0) {
+    let markdown = content ? content + '\n\n' : '';
+    markdown += imageContents.map(img => `![image](${img.image_url.url})`).join('\n\n');
+    return { content: markdown, toolCalls };
   }
   
   return { content, toolCalls };

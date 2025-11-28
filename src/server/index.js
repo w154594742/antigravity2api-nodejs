@@ -6,6 +6,40 @@ import config from '../config/config.js';
 
 const app = express();
 
+// 工具函数：生成响应元数据
+const createResponseMeta = () => ({
+  id: `chatcmpl-${Date.now()}`,
+  created: Math.floor(Date.now() / 1000)
+});
+
+// 工具函数：设置流式响应头
+const setStreamHeaders = (res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+};
+
+// 工具函数：构建流式数据块
+const createStreamChunk = (id, created, model, delta, finish_reason = null) => ({
+  id,
+  object: 'chat.completion.chunk',
+  created,
+  model,
+  choices: [{ index: 0, delta, finish_reason }]
+});
+
+// 工具函数：写入流式数据
+const writeStreamData = (res, data) => {
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+};
+
+// 工具函数：结束流式响应
+const endStream = (res, id, created, model, finish_reason) => {
+  writeStreamData(res, createStreamChunk(id, created, model, {}, finish_reason));
+  res.write('data: [DONE]\n\n');
+  res.end();
+};
+
 app.use(express.json({ limit: config.security.maxRequestSize }));
 
 app.use((err, req, res, next) => {
@@ -51,65 +85,55 @@ app.get('/v1/models', async (req, res) => {
 app.post('/v1/chat/completions', async (req, res) => {
   const { messages, model, stream = true, tools, ...params} = req.body;
   try {
-    
     if (!messages) {
       return res.status(400).json({ error: 'messages is required' });
     }
     
+    const isImageModel = model.includes('-image');
     const requestBody = await generateRequestBody(messages, model, params, tools);
-    // console.log(JSON.stringify(requestBody,null,2));
+    if (isImageModel) {
+      requestBody.request.generationConfig={
+        candidateCount: 1,
+        // imageConfig:{
+        //   aspectRatio: "1:1"
+        // }
+      }
+      requestBody.requestType="image_gen";
+      //delete requestBody.request.systemInstruction;
+      delete requestBody.request.tools;
+      delete requestBody.request.toolConfig;
+    }
+    //console.log(JSON.stringify(requestBody,null,2))
     
-    if (stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      
-      const id = `chatcmpl-${Date.now()}`;
-      const created = Math.floor(Date.now() / 1000);
+    const { id, created } = createResponseMeta();
+    
+    if (stream && !isImageModel) {
+      setStreamHeaders(res);
       let hasToolCall = false;
       
       await generateAssistantResponse(requestBody, (data) => {
-        if (data.type === 'tool_calls') {
-          hasToolCall = true;
-          res.write(`data: ${JSON.stringify({
-            id,
-            object: 'chat.completion.chunk',
-            created,
-            model,
-            choices: [{ index: 0, delta: { tool_calls: data.tool_calls }, finish_reason: null }]
-          })}\n\n`);
-        } else {
-          res.write(`data: ${JSON.stringify({
-            id,
-            object: 'chat.completion.chunk',
-            created,
-            model,
-            choices: [{ index: 0, delta: { content: data.content }, finish_reason: null }]
-          })}\n\n`);
-        }
+        const delta = data.type === 'tool_calls' 
+          ? { tool_calls: data.tool_calls } 
+          : { content: data.content };
+        if (data.type === 'tool_calls') hasToolCall = true;
+        writeStreamData(res, createStreamChunk(id, created, model, delta));
       });
       
-      res.write(`data: ${JSON.stringify({
-        id,
-        object: 'chat.completion.chunk',
-        created,
-        model,
-        choices: [{ index: 0, delta: {}, finish_reason: hasToolCall ? 'tool_calls' : 'stop' }]
-      })}\n\n`);
-      res.write('data: [DONE]\n\n');
-      res.end();
+      endStream(res, id, created, model, hasToolCall ? 'tool_calls' : 'stop');
+    } else if (stream && isImageModel) {
+      setStreamHeaders(res);
+      const { content } = await generateAssistantResponseNoStream(requestBody);
+      writeStreamData(res, createStreamChunk(id, created, model, { content }));
+      endStream(res, id, created, model, 'stop');
     } else {
       const { content, toolCalls } = await generateAssistantResponseNoStream(requestBody);
-      
       const message = { role: 'assistant', content };
-      if (toolCalls.length > 0) {
-        message.tool_calls = toolCalls;
-      }
+      if (toolCalls.length > 0) message.tool_calls = toolCalls;
       
       res.json({
-        id: `chatcmpl-${Date.now()}`,
+        id,
         object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
+        created,
         model,
         choices: [{
           index: 0,
@@ -121,37 +145,22 @@ app.post('/v1/chat/completions', async (req, res) => {
   } catch (error) {
     logger.error('生成响应失败:', error.message);
     if (!res.headersSent) {
+      const { id, created } = createResponseMeta();
+      const errorContent = `错误: ${error.message}`;
+      
       if (stream) {
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        const id = `chatcmpl-${Date.now()}`;
-        const created = Math.floor(Date.now() / 1000);
-        res.write(`data: ${JSON.stringify({
-          id,
-          object: 'chat.completion.chunk',
-          created,
-          model,
-          choices: [{ index: 0, delta: { content: `错误: ${error.message}` }, finish_reason: null }]
-        })}\n\n`);
-        res.write(`data: ${JSON.stringify({
-          id,
-          object: 'chat.completion.chunk',
-          created,
-          model,
-          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
-        })}\n\n`);
-        res.write('data: [DONE]\n\n');
-        res.end();
+        setStreamHeaders(res);
+        writeStreamData(res, createStreamChunk(id, created, model, { content: errorContent }));
+        endStream(res, id, created, model, 'stop');
       } else {
         res.json({
-          id: `chatcmpl-${Date.now()}`,
+          id,
           object: 'chat.completion',
-          created: Math.floor(Date.now() / 1000),
+          created,
           model,
           choices: [{
             index: 0,
-            message: { role: 'assistant', content: `错误: ${error.message}` },
+            message: { role: 'assistant', content: errorContent },
             finish_reason: 'stop'
           }]
         });

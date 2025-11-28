@@ -17,3 +17,5 @@ logs/
 Thumbs.db
 
 data/
+test/*.png
+test/*.jpeg
