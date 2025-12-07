@@ -35,12 +35,19 @@ npm install
 cp .env.example .env
 ```
 
-编辑 `.env` 文件配置服务器和 API 参数：
+编辑 `.env` 文件配置必要参数：
 
 ```env
-PORT=8045
-HOST=0.0.0.0
+# 必填配置
 API_KEY=sk-text
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=admin123
+JWT_SECRET=your-jwt-secret-key-change-this-in-production
+
+# 可选配置
+# PROXY=http://127.0.0.1:7897
+# SYSTEM_INSTRUCTION=你是聊天机器人
+# IMAGE_BASE_URL=http://your-domain.com
 ```
 
 ### 3. 登录获取 Token
@@ -58,6 +65,65 @@ npm start
 ```
 
 服务将在 `http://localhost:8045` 启动。
+
+## Web 管理界面
+
+服务启动后，访问 `http://localhost:8045` 即可打开 Web 管理界面。
+
+### 功能特性
+
+- 🔐 **安全登录**：JWT Token 认证，保护管理接口
+- 📊 **实时统计**：显示总 Token 数、启用/禁用状态统计
+- ➕ **多种添加方式**：
+  - OAuth 授权登录（推荐）：自动完成 Google 授权流程
+  - 手动填入：直接输入 Access Token 和 Refresh Token
+- 🎯 **Token 管理**：
+  - 查看所有 Token 的详细信息（Access Token 后缀、Project ID、过期时间）
+  - 一键启用/禁用 Token
+  - 删除无效 Token
+  - 实时刷新 Token 列表
+- ⚙️ **配置管理**：
+  - 在线编辑服务器配置（端口、监听地址）
+  - 调整默认参数（温度、Top P/K、最大 Token 数）
+  - 修改安全配置（API 密钥、请求大小限制）
+  - 配置代理、系统提示词等可选项
+  - 热重载配置（部分配置需重启生效）
+
+### 使用流程
+
+1. **登录系统**
+   - 使用 `.env` 中配置的 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 登录
+   - 登录成功后会自动保存 JWT Token 到浏览器
+
+2. **添加 Token**
+   - **OAuth 方式**（推荐）：
+     1. 点击「OAuth登录」按钮
+     2. 在弹窗中点击「打开授权页面」
+     3. 在新窗口完成 Google 授权
+     4. 复制浏览器地址栏的完整回调 URL
+     5. 粘贴到输入框并提交
+   - **手动方式**：
+     1. 点击「手动填入」按钮
+     2. 填写 Access Token、Refresh Token 和过期时间
+     3. 提交保存
+
+3. **管理 Token**
+   - 查看 Token 卡片显示的状态和信息
+   - 使用「启用/禁用」按钮控制 Token 状态
+   - 使用「删除」按钮移除无效 Token
+   - 点击「刷新」按钮更新列表
+
+4. **修改配置**
+   - 切换到「设置」标签页
+   - 修改需要调整的配置项
+   - 点击「保存配置」按钮应用更改
+   - 注意：端口和监听地址修改需要重启服务
+
+### 界面预览
+
+- **Token 管理页面**：卡片式展示所有 Token，支持快速操作
+- **设置页面**：分类展示所有配置项，支持在线编辑
+- **响应式设计**：支持桌面和移动设备访问
 
 ## API 使用
 
@@ -195,23 +261,45 @@ curl http://localhost:8045/v1/chat/completions \
 
 ## 配置说明
 
-### 环境变量 (.env)
+项目配置分为两部分：
 
-| 环境变量 | 说明 | 默认值 |
-|--------|------|--------|
-| `PORT` | 服务端口 | 8045 |
-| `HOST` | 监听地址 | 127.0.0.1 |
-| `API_KEY` | API 认证密钥 | - |
-| `MAX_REQUEST_SIZE` | 最大请求体大小 | 50mb |
-| `DEFAULT_TEMPERATURE` | 默认温度参数 | 1 |
-| `DEFAULT_TOP_P` | 默认 top_p | 0.85 |
-| `DEFAULT_TOP_K` | 默认 top_k | 50 |
-| `DEFAULT_MAX_TOKENS` | 默认最大 token 数 | 8096 |
-| `USE_NATIVE_AXIOS` | 使用原生 axios | false |
-| `TIMEOUT` | 请求超时时间（毫秒） | 30000 |
-| `PROXY` | 代理地址 | - |
-| `SYSTEM_INSTRUCTION` | 系统提示词 | - |
-| `SKIP_PROJECT_ID_FETCH` | 跳过 API 获取 ProjectId，直接随机生成（Pro 账号可用） | false |
+### 1. config.json（基础配置）
+
+基础配置文件，包含服务器、API 和默认参数设置：
+
+```json
+{
+  "server": {
+    "port": 8045,              // 服务端口
+    "host": "0.0.0.0",         // 监听地址
+    "maxRequestSize": "500mb"  // 最大请求体大小
+  },
+  "defaults": {
+    "temperature": 1,          // 默认温度参数
+    "topP": 0.85,              // 默认 top_p
+    "topK": 50,                // 默认 top_k
+    "maxTokens": 8096          // 默认最大 token 数
+  },
+  "other": {
+    "timeout": 180000,         // 请求超时时间（毫秒）
+    "skipProjectIdFetch": true // 跳过 ProjectId 获取，直接随机生成
+  }
+}
+```
+
+### 2. .env（敏感配置）
+
+环境变量配置文件，包含敏感信息和可选配置：
+
+| 环境变量 | 说明 | 必填 |
+|--------|------|------|
+| `API_KEY` | API 认证密钥 | ✅ |
+| `ADMIN_USERNAME` | 管理员用户名 | ✅ |
+| `ADMIN_PASSWORD` | 管理员密码 | ✅ |
+| `JWT_SECRET` | JWT 密钥 | ✅ |
+| `PROXY` | 代理地址（如：http://127.0.0.1:7897） | ❌ |
+| `SYSTEM_INSTRUCTION` | 系统提示词 | ❌ |
+| `IMAGE_BASE_URL` | 图片服务基础 URL | ❌ |
 
 完整配置示例请参考 `.env.example` 文件。
 
@@ -234,6 +322,10 @@ npm run login
 .
 ├── data/
 │   └── accounts.json       # Token 存储（自动生成）
+├── public/
+│   ├── index.html          # Web 管理界面
+│   ├── app.js              # 前端逻辑
+│   └── style.css           # 界面样式
 ├── scripts/
 │   ├── oauth-server.js     # OAuth 登录服务
 │   └── refresh-tokens.js   # Token 刷新脚本
@@ -241,7 +333,10 @@ npm run login
 │   ├── api/
 │   │   └── client.js       # API 调用逻辑
 │   ├── auth/
+│   │   ├── jwt.js          # JWT 认证
 │   │   └── token_manager.js # Token 管理
+│   ├── routes/
+│   │   └── admin.js        # 管理接口路由
 │   ├── bin/
 │   │   ├── antigravity_requester_android_arm64   # Android ARM64 TLS 请求器
 │   │   ├── antigravity_requester_linux_amd64     # Linux AMD64 TLS 请求器
@@ -258,8 +353,9 @@ npm run login
 ├── test/
 │   ├── test-request.js     # 请求测试
 │   └── test-transform.js   # 转换测试
-├── .env                    # 环境变量配置
+├── .env                    # 环境变量配置（敏感信息）
 ├── .env.example            # 环境变量配置示例
+├── config.json             # 基础配置文件
 └── package.json            # 项目配置
 ```
 
@@ -267,9 +363,13 @@ npm run login
 
 对于 Pro 订阅账号，可以跳过 API 验证直接使用随机生成的 ProjectId：
 
-1. 在 `.env` 文件中设置：
-```env
-SKIP_PROJECT_ID_FETCH=true
+1. 在 `config.json` 文件中设置：
+```json
+{
+  "other": {
+    "skipProjectIdFetch": true
+  }
+}
 ```
 
 2. 运行 `npm run login` 登录时会自动使用随机生成的 ProjectId

@@ -4,7 +4,13 @@
     "host": "0.0.0.0",
     "maxRequestSize": "500mb"
   },
-  "api": {},
+  "api": {
+    "url": "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+    "modelsUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
+    "noStreamUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:generateContent",
+    "host": "daily-cloudcode-pa.sandbox.googleapis.com",
+    "userAgent": "antigravity/1.11.3 windows/amd64"
+  },
   "defaults": {
     "temperature": 1,
     "topP": 0.85,
@@ -13,6 +19,6 @@
   },
   "other": {
     "timeout": 180000,
-    "skipProjectIdFetch": true
+    "skipProjectIdFetch": false
   }
 }

@@ -5,12 +5,10 @@ import axios from 'axios';
 import { log } from '../utils/logger.js';
 import { generateSessionId, generateProjectId } from '../utils/idGenerator.js';
 import config from '../config/config.js';
+import { OAUTH_CONFIG } from '../constants/oauth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const CLIENT_ID = '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com';
-const CLIENT_SECRET = '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';
 
 class TokenManager {
   constructor(filePath = path.join(__dirname,'..','..','data' ,'accounts.json')) {
@@ -87,8 +85,8 @@ class TokenManager {
   async refreshToken(token) {
     log.info('正在刷新token...');
     const body = new URLSearchParams({
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
+      client_id: OAUTH_CONFIG.CLIENT_ID,
+      client_secret: OAUTH_CONFIG.CLIENT_SECRET,
       grant_type: 'refresh_token',
       refresh_token: token.refresh_token
     });
@@ -96,7 +94,7 @@ class TokenManager {
     try {
       const response = await axios({
         method: 'POST',
-        url: 'https://oauth2.googleapis.com/token',
+        url: OAUTH_CONFIG.TOKEN_URL,
         headers: {
           'Host': 'oauth2.googleapis.com',
           'User-Agent': 'Go-http-client/1.1',
