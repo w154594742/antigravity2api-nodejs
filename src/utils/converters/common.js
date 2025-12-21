@@ -14,7 +14,7 @@ import { getThoughtSignatureForModel, getToolSignatureForModel, sanitizeToolName
 export function getSignatureContext(sessionId, actualModelName) {
   const cachedReasoningSig = getReasoningSignature(sessionId, actualModelName);
   const cachedToolSig = getToolSignature(sessionId, actualModelName);
-  
+
   return {
     reasoningSignature: cachedReasoningSig || getThoughtSignatureForModel(actualModelName),
     toolSignature: cachedToolSig || getToolSignatureForModel(actualModelName)
@@ -192,10 +192,10 @@ export function mergeSystemInstruction(baseSystem, contextSystem) {
   if (!config.useContextSystemPrompt || !contextSystem) {
     return baseSystem || '';
   }
-  
+
   const parts = [];
-  if (baseSystem && baseSystem.trim()) parts.push(baseSystem.trim());
-  if (contextSystem && contextSystem.trim()) parts.push(contextSystem.trim());
+  if (baseSystem && typeof baseSystem === 'string' && baseSystem.trim()) parts.push(baseSystem.trim());
+  if (contextSystem && typeof contextSystem === 'string' && contextSystem.trim()) parts.push(contextSystem.trim());
   return parts.join('\n\n');
 }
 
