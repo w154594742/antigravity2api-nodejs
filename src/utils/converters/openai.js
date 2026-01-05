@@ -64,7 +64,10 @@ function handleAssistantMessage(message, antigravityMessages, enableThinking, ac
     const reasoningText = (typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0)
       ? message.reasoning_content : ' ';
     const signature = message.thoughtSignature || reasoningSignature || toolSignature;
-    parts.push(createThoughtPart(reasoningText, signature));
+    // 只有在有签名时才添加 thought part，避免 API 报错
+    if (signature) {
+      parts.push(createThoughtPart(reasoningText, signature));
+    }
   }
   if (hasContent) {
     const part = { text: message.content.trimEnd() };

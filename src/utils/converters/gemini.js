@@ -97,7 +97,8 @@ function processModelThoughts(content, reasoningSignature, toolSignature, enable
     parts.splice(signatureIndex, 1);
   } else if (thoughtIndex !== -1 && signatureIndex === -1) {
     if (fallbackSig) parts[thoughtIndex].thoughtSignature = fallbackSig;
-  } else if (thoughtIndex === -1) {
+  } else if (thoughtIndex === -1 && fallbackSig) {
+    // 只有在有签名时才添加 thought part，避免 API 报错
     parts.unshift(createThoughtPart(' ', fallbackSig));
   }
   

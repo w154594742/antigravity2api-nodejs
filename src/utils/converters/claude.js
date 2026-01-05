@@ -72,7 +72,11 @@ function handleClaudeAssistantMessage(message, antigravityMessages, enableThinki
   const parts = [];
   
   if (enableThinking) {
-    parts.push(createThoughtPart(' ', messageSignature || reasoningSignature || toolSignature));
+    const signature = messageSignature || reasoningSignature || toolSignature;
+    // 只有在有签名时才添加 thought part，避免 API 报错
+    if (signature) {
+      parts.push(createThoughtPart(' ', signature));
+    }
   }
   if (hasContent) {
     const part = { text: textContent.trimEnd() };
