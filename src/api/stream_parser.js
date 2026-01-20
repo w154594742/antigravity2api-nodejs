@@ -2,6 +2,7 @@ import memoryManager, { registerMemoryPoolCleanup } from '../utils/memoryManager
 import { generateToolCallId } from '../utils/idGenerator.js';
 import { setSignature, shouldCacheSignature, isImageModel } from '../utils/thoughtSignatureCache.js';
 import { getOriginalToolName } from '../utils/toolNameCache.js';
+import { hasGroundingData, extractGroundingData } from '../utils/webSearchGrounding.js';
 import config from '../config/config.js';
 
 // 预编译的常量（避免重复创建字符串）
@@ -90,13 +91,42 @@ function convertToToolCall(functionCall, sessionId, model) {
 // 支持 DeepSeek 格式：思维链内容通过 reasoning_content 字段输出
 // 同时透传 thoughtSignature，方便客户端后续复用
 // 签名和思考内容绑定存储：收集完整思考内容后和签名一起缓存
+// 支持 Web Search：检测 grounding 数据并进入 Web Search 模式
 function parseAndEmitStreamChunk(line, state, callback) {
   if (!line.startsWith(DATA_PREFIX)) return;
-  
+
   try {
     const data = JSON.parse(line.slice(DATA_PREFIX_LEN));
-    const parts = data.response?.candidates?.[0]?.content?.parts;
-    
+    const candidate = data.response?.candidates?.[0];
+    const parts = candidate?.content?.parts;
+
+    // 检测 Web Search grounding 数据
+    if (hasGroundingData(candidate)) {
+      // 进入 Web Search 模式
+      if (!state.webSearchMode) {
+        state.webSearchMode = true;
+        state.webSearch = {
+          toolUseId: null,
+          query: '',
+          results: [],
+          supports: [],
+          bufferedTextParts: []
+        };
+      }
+
+      // 提取 grounding 数据（通常在最后一个 chunk 才完整出现）
+      const groundingData = extractGroundingData(candidate);
+      if (groundingData.query) {
+        state.webSearch.query = groundingData.query;
+      }
+      if (groundingData.results && groundingData.results.length > 0) {
+        state.webSearch.results = groundingData.results;
+      }
+      if (groundingData.supports && groundingData.supports.length > 0) {
+        state.webSearch.supports = groundingData.supports;
+      }
+    }
+
     if (parts) {
       for (const part of parts) {
         if (part.thoughtSignature) {
@@ -113,7 +143,7 @@ function parseAndEmitStreamChunk(line, state, callback) {
           if (part.text) {
             state.reasoningContent = (state.reasoningContent || '') + part.text;
           }
-          
+
           if (part.thoughtSignature) {
             state.reasoningSignature = part.thoughtSignature;
             // 延迟到流结束时缓存，确保收集到完整的思考内容
@@ -124,7 +154,12 @@ function parseAndEmitStreamChunk(line, state, callback) {
             thoughtSignature: part.thoughtSignature || state.reasoningSignature || null
           });
         } else if (part.text !== undefined) {
-          callback({ type: 'text', content: part.text });
+          // Web Search 模式：缓冲非 thinking 文本，在结束时统一输出
+          if (state.webSearchMode) {
+            state.webSearch.bufferedTextParts.push(part.text);
+          } else {
+            callback({ type: 'text', content: part.text });
+          }
         } else if (part.functionCall) {
           const toolCall = convertToToolCall(part.functionCall, state.sessionId, state.model);
           const sig = part.thoughtSignature || state.reasoningSignature || null;
@@ -137,12 +172,12 @@ function parseAndEmitStreamChunk(line, state, callback) {
         }
       }
     }
-    
-    if (data.response?.candidates?.[0]?.finishReason) {
+
+    if (candidate?.finishReason) {
       // 流结束时，判断是否应该缓存签名
       const hasTools = state.hasToolCalls || state.toolCalls.length > 0;
       const isImage = isImageModel(state.model);
-      
+
       // 注意：GeminiCLI 不使用 sessionId，但签名缓存仍然应该工作
       // sessionId 参数在 thoughtSignatureCache.js 中已不再用于缓存 key
       if (state.model && state.reasoningSignature) {
@@ -151,7 +186,18 @@ function parseAndEmitStreamChunk(line, state, callback) {
           setSignature(state.sessionId, state.model, state.reasoningSignature, content, { hasTools, isImageModel: isImage });
         }
       }
-      
+
+      // Web Search 模式：发送 grounding 数据事件
+      if (state.webSearchMode && state.webSearch) {
+        callback({
+          type: 'web_search',
+          webSearch: state.webSearch
+        });
+        // 重置 Web Search 状态
+        state.webSearchMode = false;
+        state.webSearch = null;
+      }
+
       if (state.toolCalls.length > 0) {
         callback({ type: 'tool_calls', tool_calls: state.toolCalls });
         state.toolCalls = [];

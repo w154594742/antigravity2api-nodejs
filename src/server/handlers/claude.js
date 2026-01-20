@@ -18,6 +18,11 @@ import {
   createHeartbeat,
   with429Retry
 } from '../stream.js';
+import {
+  makeSrvToolUseId,
+  buildCitationsFromSupport,
+  resolveWebSearchRedirectUrls
+} from '../../utils/webSearchGrounding.js';
 
 /**
  * 创建 Claude 流式事件
@@ -87,6 +92,8 @@ export const handleClaudeRequest = async (req, res, isStream) => {
         let contentIndex = 0;
         let usageData = null;
         let hasToolCall = false;
+        let hasWebSearchResponse = false;  // Web Search 响应标志
+        let pendingWebSearchData = null;   // 待处理的 Web Search 数据（流结束后异步处理）
         let currentBlockType = null;
         let reasoningSent = false;
 
@@ -149,6 +156,24 @@ export const handleClaudeRequest = async (req, res, isStream) => {
           () => generateAssistantResponse(requestBody, token, (data) => {
             if (data.type === 'usage') {
               usageData = data.usage;
+            } else if (data.type === 'web_search') {
+              // Web Search 响应：同步收集数据，流结束后再异步处理 URL 解析和事件发送
+              // 结束之前的块（如果有）
+              if (currentBlockType) {
+                res.write(createClaudeStreamEvent('content_block_stop', {
+                  type: "content_block_stop",
+                  index: contentIndex
+                }));
+                contentIndex++;
+                currentBlockType = null;
+              }
+
+              // 保存 Web Search 数据，流结束后处理
+              pendingWebSearchData = {
+                webSearch: data.webSearch,
+                startIndex: contentIndex  // 记录起始索引
+              };
+              hasWebSearchResponse = true;
             } else if (data.type === 'reasoning') {
               // 思维链内容 - 使用 thinking 类型
               if (!reasoningSent) {
@@ -269,14 +294,139 @@ export const handleClaudeRequest = async (req, res, isStream) => {
             type: "content_block_stop",
             index: contentIndex
           }));
+          contentIndex++;
+        }
+
+        // 流结束后处理 Web Search 数据（异步 URL 解析 + 事件发送）
+        if (pendingWebSearchData) {
+          // 确保 index:0 是 thinking 块（Claude Code plan mode 需要）
+          // 参考 Antigravity2Api 的 emitWebSearchBlocks 实现
+          if (contentIndex === 0) {
+            res.write(createClaudeStreamEvent('content_block_start', {
+              type: "content_block_start",
+              index: contentIndex,
+              content_block: { type: "thinking", thinking: "", signature: "" }
+            }));
+            res.write(createClaudeStreamEvent('content_block_delta', {
+              type: "content_block_delta",
+              index: contentIndex,
+              delta: { type: "thinking_delta", thinking: "" }
+            }));
+            res.write(createClaudeStreamEvent('content_block_stop', {
+              type: "content_block_stop",
+              index: contentIndex
+            }));
+            contentIndex++;
+          }
+
+          const { webSearch } = pendingWebSearchData;
+          const toolUseId = makeSrvToolUseId();
+
+          // 异步解析重定向 URL（best-effort，失败时使用原始 URL）
+          try {
+            await resolveWebSearchRedirectUrls(webSearch);
+          } catch (e) {
+            // 忽略 URL 解析错误
+          }
+
+          // 发送 server_tool_use 块
+          res.write(createClaudeStreamEvent('content_block_start', {
+            type: "content_block_start",
+            index: contentIndex,
+            content_block: {
+              type: "server_tool_use",
+              id: toolUseId,
+              name: "web_search",
+              input: {}
+            }
+          }));
+          res.write(createClaudeStreamEvent('content_block_delta', {
+            type: "content_block_delta",
+            index: contentIndex,
+            delta: { type: "input_json_delta", partial_json: JSON.stringify({ query: webSearch.query || '' }) }
+          }));
+          res.write(createClaudeStreamEvent('content_block_stop', {
+            type: "content_block_stop",
+            index: contentIndex
+          }));
+          contentIndex++;
+
+          // 发送 web_search_tool_result 块
+          res.write(createClaudeStreamEvent('content_block_start', {
+            type: "content_block_start",
+            index: contentIndex,
+            content_block: {
+              type: "web_search_tool_result",
+              tool_use_id: toolUseId,
+              content: Array.isArray(webSearch.results) ? webSearch.results : []
+            }
+          }));
+          res.write(createClaudeStreamEvent('content_block_stop', {
+            type: "content_block_stop",
+            index: contentIndex
+          }));
+          contentIndex++;
+
+          // 发送 citations 块
+          const results = Array.isArray(webSearch.results) ? webSearch.results : [];
+          const supports = Array.isArray(webSearch.supports) ? webSearch.supports : [];
+          for (const support of supports) {
+            const citations = buildCitationsFromSupport(results, support);
+            if (!citations.length) continue;
+            res.write(createClaudeStreamEvent('content_block_start', {
+              type: "content_block_start",
+              index: contentIndex,
+              content_block: { type: "text", text: "", citations: [] }
+            }));
+            for (const citation of citations) {
+              res.write(createClaudeStreamEvent('content_block_delta', {
+                type: "content_block_delta",
+                index: contentIndex,
+                delta: { type: "citations_delta", citation }
+              }));
+            }
+            res.write(createClaudeStreamEvent('content_block_stop', {
+              type: "content_block_stop",
+              index: contentIndex
+            }));
+            contentIndex++;
+          }
+
+          // 发送缓冲的文本内容
+          const bufferedText = Array.isArray(webSearch.bufferedTextParts) ? webSearch.bufferedTextParts : [];
+          if (bufferedText.length > 0) {
+            res.write(createClaudeStreamEvent('content_block_start', {
+              type: "content_block_start",
+              index: contentIndex,
+              content_block: { type: "text", text: "" }
+            }));
+            for (const text of bufferedText) {
+              if (!text) continue;
+              res.write(createClaudeStreamEvent('content_block_delta', {
+                type: "content_block_delta",
+                index: contentIndex,
+                delta: { type: "text_delta", text }
+              }));
+            }
+            res.write(createClaudeStreamEvent('content_block_stop', {
+              type: "content_block_stop",
+              index: contentIndex
+            }));
+            contentIndex++;
+          }
         }
 
         // 发送 message_delta
         const stopReason = hasToolCall ? 'tool_use' : 'end_turn';
+        const finalUsage = usageData ? { output_tokens: usageData.completion_tokens || 0 } : { output_tokens: 0 };
+        // Web Search 响应需要添加 server_tool_use 统计
+        if (hasWebSearchResponse) {
+          finalUsage.server_tool_use = { web_search_requests: 1 };
+        }
         res.write(createClaudeStreamEvent('message_delta', {
           type: "message_delta",
           delta: { stop_reason: stopReason, stop_sequence: null },
-          usage: usageData ? { output_tokens: usageData.completion_tokens || 0 } : { output_tokens: 0 }
+          usage: finalUsage
         }));
 
         // 发送 message_stop
@@ -306,12 +456,20 @@ export const handleClaudeRequest = async (req, res, isStream) => {
       let reasoningSignature = null;
       const toolCalls = [];
       let usageData = null;
+      let webSearchData = null;  // Web Search 数据（同步收集，流结束后异步处理）
 
       try {
         await with429Retry(
           () => generateAssistantResponse(requestBody, token, (data) => {
             if (data.type === 'usage') {
               usageData = data.usage;
+            } else if (data.type === 'web_search') {
+              // Web Search 响应：同步收集数据，流结束后再异步处理 URL 解析
+              webSearchData = data.webSearch;
+              // 将缓冲的文本内容合并到 content
+              if (Array.isArray(data.webSearch.bufferedTextParts)) {
+                content += data.webSearch.bufferedTextParts.join('');
+              }
             } else if (data.type === 'reasoning') {
               reasoningContent += data.reasoning_content || '';
               if (data.thoughtSignature) {
@@ -328,6 +486,15 @@ export const handleClaudeRequest = async (req, res, isStream) => {
           () => tokenManager.recordRequest(token, model)
         );
 
+        // 流结束后异步解析 Web Search 重定向 URL
+        if (webSearchData) {
+          try {
+            await resolveWebSearchRedirectUrls(webSearchData);
+          } catch (e) {
+            // 忽略 URL 解析错误
+          }
+        }
+
         const stopReason = toolCalls.length > 0 ? 'tool_use' : 'end_turn';
         const response = createClaudeResponse(
           msgId,
@@ -338,7 +505,10 @@ export const handleClaudeRequest = async (req, res, isStream) => {
           toolCalls,
           stopReason,
           usageData,
-          { passSignatureToClient: config.passSignatureToClient }
+          {
+            passSignatureToClient: config.passSignatureToClient,
+            webSearchData  // 传递 Web Search 数据
+          }
         );
 
         res.json(response);

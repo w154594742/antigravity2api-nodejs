@@ -14,7 +14,8 @@ import {
   mergeSystemInstruction,
   modelMapping,
   isEnableThinking,
-  generateGenerationConfig
+  generateGenerationConfig,
+  hasWebSearchTool
 } from './common.js';
 
 function extractImagesFromClaudeContent(content) {
@@ -143,13 +144,19 @@ export function generateClaudeRequestBody(claudeMessages, modelName, parameters,
   // 直接传递用户的系统提示词，让 buildSystemInstruction 处理所有合并逻辑
   // 包括反重力官方提示词、萌萌提示词和用户提示词的位置配置
 
-  const tools = convertClaudeToolsToAntigravity(claudeTools, token.sessionId, actualModelName);
+  // 检测是否为 Web Search 请求（Claude 的 web_search 工具需要映射到 Gemini 的 googleSearch）
+  const isWebSearch = hasWebSearchTool(claudeTools);
+
+  // Web Search 场景不需要转换工具（会使用 googleSearch），普通场景正常转换
+  const tools = isWebSearch ? [] : convertClaudeToolsToAntigravity(claudeTools, token.sessionId, actualModelName);
   const hasTools = tools && tools.length > 0;
+
   return buildRequestBody({
     contents: claudeMessageToAntigravity(claudeMessages, enableThinking, actualModelName, token.sessionId, hasTools),
     tools: tools,
     generationConfig: generateGenerationConfig(parameters, enableThinking, actualModelName),
     sessionId: token.sessionId,
-    systemInstruction: systemPrompt
+    systemInstruction: systemPrompt,
+    isWebSearch  // 传递 Web Search 标志，让 buildRequestBody 处理 googleSearch 配置
   }, token, actualModelName);
 }

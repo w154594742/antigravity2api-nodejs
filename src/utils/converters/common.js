@@ -179,6 +179,15 @@ export function pushModelMessage({ parts, toolCalls, hasContent }, antigravityMe
 }
 
 /**
+ * 检测工具列表中是否包含 web_search 工具
+ * @param {Array} tools - Claude 格式的工具列表
+ * @returns {boolean}
+ */
+export function hasWebSearchTool(tools) {
+  return Array.isArray(tools) && tools.some((tool) => tool?.name === 'web_search');
+}
+
+/**
  * 构建基础请求体
  * @param {Object} options - 选项
  * @param {Array} options.contents - 消息内容
@@ -186,12 +195,19 @@ export function pushModelMessage({ parts, toolCalls, hasContent }, antigravityMe
  * @param {Object} options.generationConfig - 生成配置
  * @param {string} options.sessionId - 会话 ID
  * @param {string} options.systemInstruction - 系统指令
+ * @param {boolean} options.isWebSearch - 是否为 Web Search 请求
  * @param {Object} token - Token 对象
  * @param {string} actualModelName - 实际模型名称
  * @returns {Object} 请求体
  */
-export function buildRequestBody({ contents, tools, generationConfig, sessionId, systemInstruction }, token, actualModelName) {
+export function buildRequestBody({ contents, tools, generationConfig, sessionId, systemInstruction, isWebSearch }, token, actualModelName) {
   const hasTools = tools && tools.length > 0;
+
+  // Web Search 场景：强制使用 gemini-2.5-flash 模型
+  const finalModel = isWebSearch ? 'gemini-2.5-flash' : actualModelName;
+
+  // Web Search 场景：设置 requestType 为 web_search
+  const requestType = isWebSearch ? 'web_search' : 'agent';
 
   const requestBody = {
     project: token.projectId,
@@ -201,13 +217,30 @@ export function buildRequestBody({ contents, tools, generationConfig, sessionId,
       generationConfig,
       sessionId
     },
-    model: actualModelName,
+    model: finalModel,
     userAgent: 'antigravity',
-    requestType: 'agent'
+    requestType
   };
 
-  // 只在有工具时才添加 tools 和 toolConfig 字段
-  if (hasTools) {
+  // Web Search 场景：使用 googleSearch 工具配置
+  if (isWebSearch) {
+    requestBody.request.tools = [
+      {
+        googleSearch: {
+          enhancedContent: {
+            imageSearch: {
+              maxResultCount: 5,
+            },
+          },
+        },
+      },
+    ];
+    // Web Search 场景强制 candidateCount=1
+    if (requestBody.request.generationConfig) {
+      requestBody.request.generationConfig.candidateCount = 1;
+    }
+  } else if (hasTools) {
+    // 普通工具场景：添加 tools 和 toolConfig 字段
     requestBody.request.tools = tools;
     requestBody.request.toolConfig = { functionCallingConfig: { mode: 'VALIDATED' } };
   }
