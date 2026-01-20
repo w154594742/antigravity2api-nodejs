@@ -4,6 +4,7 @@ import http from 'http';
 import https from 'https';
 import { Readable } from 'stream';
 import config from '../config/config.js';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // ==================== DNS & 代理统一配置 ====================
 
@@ -22,30 +23,77 @@ function customLookup(hostname, options, callback) {
   });
 }
 
-// 使用自定义 DNS 解析的 Agent（优先 IPv4，失败则 IPv6）
-const httpAgent = new http.Agent({
+// 基础 Agent（不带代理）
+const baseHttpAgent = new http.Agent({
   lookup: customLookup,
   keepAlive: true
 });
 
-const httpsAgent = new https.Agent({
+const baseHttpsAgent = new https.Agent({
   lookup: customLookup,
   keepAlive: true
 });
 
-// 统一构建代理配置
+// 支持代理的 Agent（动态创建）
+let proxyHttpAgent = null;
+let proxyHttpsAgent = null;
+let currentProxyUrl = null;
+
+// 统一构建代理配置（用于检查代理是否配置）
 function buildProxyConfig() {
   if (!config.proxy) return false;
   try {
     const proxyUrl = new URL(config.proxy);
-    return {
+    const proxyConfig = {
       protocol: proxyUrl.protocol.replace(':', ''),
       host: proxyUrl.hostname,
       port: parseInt(proxyUrl.port, 10)
     };
+    // 添加代理认证信息（如果存在）
+    if (proxyUrl.username || proxyUrl.password) {
+      proxyConfig.auth = {
+        username: decodeURIComponent(proxyUrl.username || ''),
+        password: decodeURIComponent(proxyUrl.password || '')
+      };
+    }
+    return proxyConfig;
   } catch {
     return false;
   }
+}
+
+// 创建或获取支持代理的 Agent
+function getProxyAgents() {
+  const proxyConfig = buildProxyConfig();
+
+  // 没有代理配置，返回基础 Agent
+  if (!proxyConfig) {
+    return { httpAgent: baseHttpAgent, httpsAgent: baseHttpsAgent };
+  }
+
+  const proxyUrl = config.proxy;
+
+  // 如果代理配置没变，复用已创建的 Agent
+  if (proxyUrl === currentProxyUrl && proxyHttpAgent && proxyHttpsAgent) {
+    return { httpAgent: proxyHttpAgent, httpsAgent: proxyHttpsAgent };
+  }
+
+  // 代理配置变化，重新创建 Agent
+  currentProxyUrl = proxyUrl;
+
+  // HTTP 请求的代理 Agent（对于 HTTP 目标）
+  proxyHttpAgent = new http.Agent({
+    lookup: customLookup,
+    keepAlive: true
+  });
+
+  // HTTPS 请求的代理 Agent（使用 HttpsProxyAgent）
+  proxyHttpsAgent = new HttpsProxyAgent(proxyUrl, {
+    lookup: customLookup,
+    keepAlive: true
+  });
+
+  return { httpAgent: proxyHttpAgent, httpsAgent: proxyHttpsAgent };
 }
 
 // 将数据转换为流以启用 chunked 编码
@@ -64,6 +112,9 @@ export function buildAxiosRequestConfig({
   responseType,
   useChunked = false
 }) {
+  // 动态获取 Agent（根据代理配置）
+  const { httpAgent, httpsAgent } = getProxyAgents();
+
   const axiosConfig = {
     method,
     url,
@@ -71,7 +122,8 @@ export function buildAxiosRequestConfig({
     timeout,
     httpAgent,
     httpsAgent,
-    proxy: buildProxyConfig(),
+    // 不再需要单独设置 proxy，因为 Agent 已经处理了代理
+    // proxy: buildProxyConfig(),
     // 禁用自动设置 Content-Length，让 axios 使用 Transfer-Encoding: chunked
     maxContentLength: Infinity,
     maxBodyLength: Infinity
