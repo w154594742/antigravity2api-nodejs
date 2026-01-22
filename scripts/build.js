@@ -51,11 +51,11 @@ const outputNameMap = {
 
 // 平台对应的 bin 文件映射
 const binFileMap = {
-  'node18-win-x64': 'antigravity_requester_windows_amd64.exe',
-  'node18-linux-x64': 'antigravity_requester_linux_amd64',
-  'node18-linux-arm64': 'antigravity_requester_android_arm64',  // ARM64 使用 Android 版本
-  'node18-macos-x64': 'antigravity_requester_linux_amd64',      // macOS x64 暂用 Linux 版本
-  'node18-macos-arm64': 'antigravity_requester_android_arm64'   // macOS ARM64 暂用 Android 版本
+  'node18-win-x64': 'fingerprint_windows_amd64.exe',
+  'node18-linux-x64': 'fingerprint_linux_amd64',
+  'node18-linux-arm64': 'fingerprint_android_arm64',
+  'node18-macos-x64': 'fingerprint_linux_amd64',
+  'node18-macos-arm64': 'fingerprint_android_arm64'
 };
 
 console.log('📦 Step 1: Bundling with esbuild...');
